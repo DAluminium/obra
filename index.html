@@ -964,7 +964,9 @@ function contasDe(c){
 function lerFicha(){
   const v=id=>document.getElementById(id).value.trim();
   return {
-    ct:v('f-ct'), ano:v('f-ano'), cliente:v('f-cliente'),
+    // Grava com os 4 digitos do papel: digitar 6 guarda 0006. Contrato com mais
+    // de 4 digitos, ou com letra e traco (116-113), fica como foi digitado.
+    ct:ctFormatado(v('f-ct')), ano:v('f-ano'), cliente:v('f-cliente'),
     coord:v('f-coord'), respCom:v('f-respcom'),
     cidade:v('f-cidade'), condominio:v('f-condominio'),
     status:v('f-status'), revisao:v('f-revisao'),
@@ -1086,7 +1088,9 @@ function filtrados(esconderFinalizadas){
     // Os campos extras entram na busca: criar uma coluna e não poder procurar
     // por ela deixaria o campo pela metade.
     const valoresExtras=Object.keys(c.extras||{}).map(function(k){ return c.extras[k]; });
-    return [c.ct,c.ano,c.cliente,c.coord,c.respCom,c.cidade,c.condominio,
+    // O CT entra de tres jeitos: como esta gravado ("6"), como aparece na tela
+    // ("0006") e sem os zeros — assim procurar pelo numero do papel acha.
+    return [c.ct,ctFormatado(c.ct),ctNormal(c.ct),c.ano,c.cliente,c.coord,c.respCom,c.cidade,c.condominio,
             c.linhas,c.cores,c.vidros,c.status,c.obs]
       .concat(valoresExtras)
       .join(' ').toLowerCase().indexOf(busca)>=0;
@@ -1334,7 +1338,7 @@ function htmlPainel(){
       '<span class="pill pill-cinza">'+arr.length+'</span></div><div class="bloco-body">'+
       arr.map(function(c){
         return '<div class="linha-alerta" onclick="abrirFicha(\''+c.id+'\')">'+
-          '<strong style="min-width:52px">'+esc(c.ct||'—')+'</strong>'+
+          '<strong style="min-width:52px">'+esc(ctFormatado(c.ct)||'—')+'</strong>'+
           '<span style="flex:1;min-width:150px">'+esc(c.cliente||'')+'</span>'+
           pill(c.status||'—',STATUS_COR[c.status]||'pill-cinza')+
           (c.entrega?'<span class="td-fraco">'+fmtData(c.entrega)+'</span>':'')+
@@ -1428,7 +1432,7 @@ function abrirFicha(id){
   preencherTiposDoc(); renderDocs();
   renderExtrasNaFicha(c);
   const p=(campo,v)=>{ document.getElementById(campo).value=v||''; };
-  p('f-ct',c.ct); p('f-ano',c.ano); p('f-cliente',c.cliente);
+  p('f-ct',ctFormatado(c.ct)); p('f-ano',c.ano); p('f-cliente',c.cliente);
   p('f-coord',c.coord); p('f-respcom',c.respCom);
   p('f-cidade',c.cidade); p('f-condominio',c.condominio);
   p('f-status',c.status); p('f-revisao',c.revisao);
@@ -1438,7 +1442,7 @@ function abrirFicha(id){
   p('f-entrega',c.entrega);
   p('f-linhas',c.linhas); p('f-cores',c.cores); p('f-vidros',c.vidros);
   p('f-pecas',c.pecas); p('f-obs',c.obs);
-  document.getElementById('ficha-titulo').textContent='CT '+(c.ct||'—')+' · '+(c.cliente||'');
+  document.getElementById('ficha-titulo').textContent='CT '+(ctFormatado(c.ct)||'—')+' · '+(c.cliente||'');
   const gestor=podeGerenciar();
   document.getElementById('ficha-btn-excluir').style.display=(gestor&&!c.excluido)?'':'none';
   document.getElementById('ficha-btn-restaurar').style.display=(gestor&&c.excluido)?'':'none';
@@ -1733,7 +1737,7 @@ function celulaDaCarteira(col, c){
   }
   switch(col.key){
     case 'ct':
-      return '<td class="td-ct">'+esc(c.ct||'—')+'<span class="td-ano">'+esc(c.ano||'')+'</span></td>';
+      return '<td class="td-ct">'+esc(ctFormatado(c.ct)||'—')+'<span class="td-ano">'+esc(c.ano||'')+'</span></td>';
     case 'cliente':
       return '<td class="td-cliente">'+esc(c.cliente||'—')+
         (((c.docs)||[]).length?' <span class="pill pill-teal" title="'+((c.docs)||[]).length+
@@ -2375,6 +2379,13 @@ function primeiraEtapa(fab){
 // vínculo de verdade continua sendo o ctoId.
 function ctNormal(v){
   return String(v||'').toUpperCase().replace(/[^A-Z0-9]/g,'').replace(/^CT/,'').replace(/^0+/,'');
+}
+// Como o numero do contrato APARECE na tela: com 4 digitos, igual ao papel
+// ("Nº do Pedido: 0006"). Só vale para contrato que é só número — 116-113 e
+// 0001-v2 ficam como estão. Nao muda o que esta gravado: e so desenho.
+function ctFormatado(v){
+  const t=String(v==null?'':v).trim();
+  return /^[0-9]+$/.test(t) ? t.padStart(4,'0') : t;
 }
 // O que foi cadastrado à mão (sem ctoId) com o mesmo número de contrato.
 // Sem isto, salvar a ficha criava um SEGUNDO lançamento: em 15/09/2026 Iris
