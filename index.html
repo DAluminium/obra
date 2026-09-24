@@ -811,14 +811,44 @@ let _fabricaObras=null, _comprasDados=null;
 // ================= SESSÃO =================
 function lerSSO(){
   try{
-    const s=JSON.parse(localStorage.getItem('dalum-sso')||'null');
+    const s=JSON.parse(loginGuardaLer('dalum-sso')||'null');
     if(!s||!s.nome) return null;
-    if(Date.now()-s.ts>8*60*60*1000){ localStorage.removeItem('dalum-sso'); return null; }
+    if(Date.now()-s.ts>8*60*60*1000){ loginGuardaApagar('dalum-sso'); return null; }
     return s;
   }catch(e){ return null; }
 }
 
 const TOKEN_KEY='dalum-token';
+
+// ---- ONDE O CRACHA E A SESSAO FICAM GUARDADOS (24/09/2026) ----
+// O cracha do ADMIN fica so na ABA. Antes ficava no navegador, valendo 8
+// horas: o admin usava um computador, esquecia de sair, e qualquer pessoa
+// daquele navegador entrava como admin so atualizando a pagina — sem digitar
+// senha nenhuma. Na aba, fechou = acabou.
+// Para os demais usuarios nada muda: segue no navegador, e quem entrou de
+// manha continua entrando direto o dia todo.
+// De quebra: como o admin nao escreve no navegador, a janela de quem ja
+// estava logado continua com o cracha dela.
+function loginGuardaLer(chave){
+  try{ const v=sessionStorage.getItem(chave); if(v!==null) return v; }catch(e){}
+  try{ return localStorage.getItem(chave); }catch(e){ return null; }
+}
+function loginGuardaGravar(chave, valor, soNestaAba){
+  try{ sessionStorage.setItem(chave, valor); }catch(e){}
+  // O admin nao grava no navegador — e nao apaga o que ja esta la, que seria
+  // derrubar quem estiver logado em outra janela.
+  if(!soNestaAba){ try{ localStorage.setItem(chave, valor); }catch(e){} }
+}
+function loginGuardaApagar(chave){
+  let meu=null;
+  try{ meu=sessionStorage.getItem(chave); }catch(e){}
+  try{ sessionStorage.removeItem(chave); }catch(e){}
+  try{
+    // So apaga o que esta no navegador se for o MESMO desta aba: numa aba de
+    // admin, o que esta guardado no navegador e de outra pessoa.
+    if(meu===null || localStorage.getItem(chave)===meu) localStorage.removeItem(chave);
+  }catch(e){}
+}
 
 // LGPD (auditoria de 18/09/2026): ao sair, apaga a copia dos dados guardada no
 // navegador. Antes o Sair tirava so o cracha — os contratos (com CPF), as
@@ -844,14 +874,14 @@ function b64urlParaTexto(s){
 
 function lerToken(){
   try{
-    const t=localStorage.getItem(TOKEN_KEY);
+    const t=loginGuardaLer(TOKEN_KEY);
     if(!t) return null;
     const partes=t.split('.');
     if(partes.length!==2) return null;
     const d=JSON.parse(b64urlParaTexto(partes[0]));
-    if(!d||!d.exp||Date.now()>=d.exp){ localStorage.removeItem(TOKEN_KEY); return null; }
+    if(!d||!d.exp||Date.now()>=d.exp){ loginGuardaApagar(TOKEN_KEY); return null; }
     return {token:t,dados:d};
-  }catch(e){ localStorage.removeItem(TOKEN_KEY); return null; }
+  }catch(e){ loginGuardaApagar(TOKEN_KEY); return null; }
 }
 
 function cabecalhos(extra){
@@ -876,12 +906,29 @@ async function fazerLogin(user,senha){
     e.status=r.status;
     throw e;
   }
-  localStorage.setItem(TOKEN_KEY,j.token);
+  // O cracha do admin nao fica guardado no navegador: so nesta aba.
+  loginGuardaGravar(TOKEN_KEY,j.token,String(j.role||'').toLowerCase()==='admin');
   return j;
 }
 
 // ================= UM ACESSO POR PESSOA =================
-let _sessionIdObra=Math.random().toString(36).slice(2)+Date.now().toString(36);
+// A identidade desta TELA vive na memoria da ABA, e nao e sorteada a cada
+// carregamento. Assim, recarregar a pagina continua sendo a MESMA tela — era
+// o defeito de 24/09/2026, em que o F5 virava "outra sessao" — enquanto abrir
+// uma aba nova conta como outro lugar, e a regra de um acesso por usuario
+// derruba a anterior. O modulo aberto dentro do portal divide a memoria da
+// aba, entao portal e modulo sao a mesma linha na lista de sessoes.
+function idDestaTela(){
+  try{
+    // Na memoria da ABA: sobrevive ao F5 (era o defeito original) e nao
+    // atravessa para outra aba — duas abas sao duas telas, e a regra de um
+    // acesso por usuario derruba a anterior, como sempre foi.
+    let i=sessionStorage.getItem('dalum-sessao');
+    if(!i){ i=Math.random().toString(36).slice(2)+Date.now().toString(36); sessionStorage.setItem('dalum-sessao',i); }
+    return i;
+  }catch(e){ return 'tela'+Date.now(); }
+}
+let _sessionIdObra=idDestaTela();
 let _checkObra=null;
 
 // ---- ANEXOS PRIVADOS (auditoria de LGPD, item 6, 21/09/2026) ----
@@ -1074,107 +1121,49 @@ function cabecalhosSessoesObra(extra){
   return Object.assign(cabecalhos(extra||{}),{'X-Sistema':'sessions'});
 }
 
-function encerrarNaListaObra(d, sessionId, motivo){
-  const i=(d.ativas||[]).findIndex(function(s){ return s.sessionId===sessionId; });
-  if(i<0) return false;
-  const s=d.ativas[i];
-  d.ativas.splice(i,1);
-  const inicio=s.inicio||s.ts||Date.now();
-  const fim=(motivo==='parou')?(s.ts||inicio):Date.now();
-  d.encerradas=[{sessionId:s.sessionId,username:s.username||'',nome:s.nome||'',
-    sistema:s.sistema||'',inicio:inicio,fim:fim,
-    minutos:Math.max(0,Math.round((fim-inicio)/60000)),motivo:motivo}]
-    .concat(d.encerradas||[]).slice(0,500);
-  return true;
+// encerrarNaListaObra e limparParadasObra sairam daqui: fechar sessao e
+// limpar quem parou viraram conta do Worker.
+async function acaoSessaoObra(nome, corpo){
+  const r=await fetch(WORKER,{
+    method:'POST',
+    headers:cabecalhosSessoesObra({'Content-Type':'application/json','X-Action':nome}),
+    body:JSON.stringify(Object.assign({sessionId:_sessionIdObra, ambiente:AMBIENTE_OBRA}, corpo||{}))
+  });
+  if(!r.ok) throw Object.assign(new Error('worker '+r.status),{status:r.status});
+  return r.json();
 }
 
-function limparParadasObra(d){
-  const LIMITE=60*60*1000, agora=Date.now();
-  let mexeu=false;
-  (d.ativas||[]).slice().forEach(function(s){
-    if(agora-(s.ts||0)>=LIMITE && encerrarNaListaObra(d,s.sessionId,'parou')) mexeu=true;
-  });
-  return mexeu;
-}
+
 
 async function registrarSessaoObra(nome, username){
-  try{
-    const r=await fetch(WORKER,{headers:cabecalhosSessoesObra()});
-    if(!r.ok) return;
-    const d=await r.json();
-    const u=(username||nome||'').toLowerCase().trim();
-    const ativas=(d.ativas||[]).filter(function(s){
-      return s.sessionId!==_sessionIdObra && !((s.username||'').toLowerCase().trim()===u && s.sistema==='obra' && mesmoAmbienteObra(s));
-    });
-    ativas.push({sessionId:_sessionIdObra,username:u,nome:nome,sistema:'obra',ambiente:AMBIENTE_OBRA,ts:Date.now(),inicio:Date.now()});
-    d.ativas=ativas;
-    await fetch(WORKER,{method:'PATCH',
-      headers:cabecalhosSessoesObra({'Content-Type':'application/json'}),
-      body:JSON.stringify({data:d})});
-  }catch(e){}
+  try{ await acaoSessaoObra('sessao-entrar',{sistema:'obra'}); }catch(e){}
 }
 
 async function removerSessaoObra(){
-  try{
-    const r=await fetch(WORKER,{headers:cabecalhosSessoesObra()});
-    if(!r.ok) return;
-    const d=await r.json();
-    encerrarNaListaObra(d,_sessionIdObra,'saiu');
-    await fetch(WORKER,{method:'PATCH',
-      headers:cabecalhosSessoesObra({'Content-Type':'application/json'}),
-      body:JSON.stringify({data:d})});
-  }catch(e){}
+  try{ await acaoSessaoObra('sessao-sair',{}); }catch(e){}
 }
 
 async function checkForceLogoutObra(){
-  try{
-    const r=await fetch(WORKER,{headers:cabecalhosSessoesObra()});
-    if(!r.ok) return;
-    const d=await r.json();
-    const forcados=(d.forceLogout||[]);
-    if(forcados.indexOf(_sessionIdObra)>=0){
-      const motivo=(d.forceLogoutMotivo||{})[_sessionIdObra]==='outro-login'?'outro-login':'deslogado';
-      d.forceLogout=forcados.filter(function(x){ return x!==_sessionIdObra; });
-      if(d.forceLogoutMotivo) delete d.forceLogoutMotivo[_sessionIdObra];
-      encerrarNaListaObra(d,_sessionIdObra,motivo);
-      await fetch(WORKER,{method:'PATCH',
-        headers:cabecalhosSessoesObra({'Content-Type':'application/json'}),
-        body:JSON.stringify({data:d})});
-      // Este aviso PRECISA parar o código até o clique: o que vem depois
-      // recarrega a página. Por isso a ação vai no callback.
-      aviso('Sessão encerrada',
-        motivo==='outro-login'
-          ?'Sua sessão foi encerrada porque este usuário entrou em outro navegador.'
-          :'Sua sessão foi encerrada pelo administrador.',
-        function(){
-          try{ localStorage.removeItem(TOKEN_KEY); localStorage.removeItem('dalum-sso'); }catch(e){} apagarDadosLocais();
-          location.reload();
-        });
-      return;
-    }
-    const AGORA=Date.now(), CADA=5*60*1000;
-    let precisaGravar=limparParadasObra(d);
-    const eu=(d.ativas||[]).find(function(s){ return s.sessionId===_sessionIdObra; });
-    if(eu){
-      if(AGORA-(eu.ts||0)>CADA){ eu.ts=AGORA; precisaGravar=true; }
-    } else {
-      d.ativas=(d.ativas||[]).concat([{sessionId:_sessionIdObra,
-        username:(usuario||'').toLowerCase().trim(), nome:usuario,
-        sistema:'obra', ambiente:AMBIENTE_OBRA, ts:AGORA, inicio:AGORA}]);
-      precisaGravar=true;
-    }
-    if(!precisaGravar) return;
-    await fetch(WORKER,{method:'PATCH',
-      headers:cabecalhosSessoesObra({'Content-Type':'application/json'}),
-      body:JSON.stringify({data:d})});
-  }catch(e){}
+  let r=null;
+  try{ r=await acaoSessaoObra('sessao-sinal',{sistema:'obra'}); }catch(e){ return; }
+  if(!r||!r.derrubado) return;
+  // Este aviso PRECISA parar o código até o clique: o que vem depois
+  // recarrega a página. Por isso a ação vai no callback.
+  aviso('Sessão encerrada',
+    r.motivo==='outro-login'
+      ?'Sua sessão foi encerrada porque este usuário entrou em outro navegador.'
+      :'Sua sessão foi encerrada pelo administrador.',
+    function(){
+      try{ loginGuardaApagar(TOKEN_KEY); loginGuardaApagar('dalum-sso'); }catch(e){} apagarDadosLocais();
+      location.reload();
+    });
 }
 
 async function sairDaObra(){
   if(!confirm('Deseja sair?')) return;
   await removerSessaoObra();
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem('dalum-sso');
+  loginGuardaApagar(TOKEN_KEY);
+  loginGuardaApagar('dalum-sso');
   apagarDadosLocais();
   if(window.self!==window.top) window.parent.postMessage('logout','*');
   location.reload();
@@ -1221,7 +1210,7 @@ function fecharAviso(){
 function sessaoExpirada(){
   if(window.__sessaoExpirada) return;
   window.__sessaoExpirada = true;
-  try{ localStorage.removeItem(TOKEN_KEY); localStorage.removeItem('dalum-sso'); }catch(e){} apagarDadosLocais();
+  try{ loginGuardaApagar(TOKEN_KEY); loginGuardaApagar('dalum-sso'); }catch(e){} apagarDadosLocais();
   aviso('Sessão expirada',
         'O acesso vale 8 horas e o seu venceu. Nada foi perdido — o que você ' +
         'já tinha salvo continua guardado.\n\nVamos voltar para a tela de entrada.',
