@@ -1521,6 +1521,21 @@ function arrumar(d){
   if(!d.layoutCarteira||typeof d.layoutCarteira!=='object') d.layoutCarteira={};
   if(!Array.isArray(d.layoutCarteira.ordem)) d.layoutCarteira.ordem=[];
   if(!Array.isArray(d.layoutCarteira.ocultas)) d.layoutCarteira.ocultas=[];
+  // Os rotulos de lista de material encurtaram em 05/11/2026. A conversao fica
+  // AQUI, na leitura, e nao numa gravacao propria: a tela ja mostra o nome
+  // curto, e a proxima gravacao qualquer leva o nome curto junto, de carona.
+  // Nenhum arquivo se perde — so a etiqueta muda de texto.
+  d.tiposDoc=d.tiposDoc.map(encurtarRotulo).filter(function(t,i,todos){
+    // Dois rotulos que viraram o mesmo nome deixam de ser dois.
+    return todos.findIndex(function(x){
+      return normalizarRotuloLista(x)===normalizarRotuloLista(t);
+    })===i;
+  });
+  d.contratos.forEach(function(c){
+    (c&&Array.isArray(c.docs)?c.docs:[]).forEach(function(doc){
+      if(doc && doc.tipo) doc.tipo=encurtarRotulo(doc.tipo);
+    });
+  });
   return d;
 }
 function lerLocal(){
@@ -5447,10 +5462,10 @@ function adivinharRotulo(nome, padrao){
   const permitidos=tiposDocPermitidos();
   const tem=function(t){ return permitidos.indexOf(t)>=0; };
   const pares=[
-    ['perfil',   'Lista de material perfil aluminio'],
-    ['aluminio', 'Lista de material perfil aluminio'],
-    ['acessorio','Lista de material acessorios'],
-    ['vidro',    'Lista de material vidro'],
+    ['perfil',   'Lista perfil alumínio'],
+    ['aluminio', 'Lista perfil alumínio'],
+    ['acessorio','Lista acessórios'],
+    ['vidro',    'Lista vidro'],
     ['proposta', 'Proposta'],
     ['projeto',  'Projeto'],
     ['medicao',  'Medição'],
@@ -5834,6 +5849,27 @@ async function moverStatus(nome, passo){
 
 // Quantos contratos usam um rótulo. Serve para não deixar remover rótulo em
 // uso: os anexos guardam o texto, e tirá-lo deixaria o arquivo sem etiqueta.
+// Os tres rotulos de lista de material (ROTULOS_LISTA_COMPRAS) sao FIXOS: e
+// por eles que o botao "→ Compras" reconhece que o anexo e uma lista e abre o
+// pedido. Eles nem ficam gravados em dados.tiposDoc — o tiposDoc() acrescenta.
+// Por isso Editar e Tirar neles nao faziam nada, caladamente (05/11/2026).
+function ehRotuloFixo(t){
+  const k=normalizarRotuloLista(t);
+  // O nome comprido de antes de 05/11/2026 continua valendo: a conversao da
+  // leitura ja troca o texto, mas um anexo que chegue por outro caminho tem
+  // de continuar sendo reconhecido como lista de material.
+  if(Object.prototype.hasOwnProperty.call(ROTULOS_ANTIGOS,k)) return true;
+  return ROTULOS_LISTA_COMPRAS.some(function(x){
+    return normalizarRotuloLista(x)===k;
+  });
+}
+function porqueRotuloFixo(){
+  aviso('Rótulo fixo',
+    'Os três rótulos de lista de material são fixos: é por eles que o botão "→ Compras" reconhece uma lista e abre o pedido.\n\n'+
+    'Se um deles mudasse de nome ou saísse da lista, as listas anexadas deixariam de abrir pedido no Compras.\n\n'+
+    'Se você tem um rótulo PARECIDO sobrando (por exemplo "Lista perfil aluminio"), use o Editar DELE e escreva o nome do rótulo fixo: o sistema junta os dois.');
+}
+
 function usoTipoDoc(rotulo){
   let n=0;
   (dados.contratos||[]).forEach(function(c){
@@ -5845,15 +5881,27 @@ function usoTipoDoc(rotulo){
 function renderTiposDoc(){
   const el=document.getElementById('td-lista');
   if(!el) return;
+  let temFixo=false;
   el.innerHTML='<div class="caixa">'+tiposDoc().map(function(t){
     const uso=usoTipoDoc(t);
-    return '<div class="caixa-linha"><span>'+esc(t)+'</span>'+
+    const fixo=ehRotuloFixo(t);
+    if(fixo) temFixo=true;
+    const arg=JSON.stringify(t).replace(/"/g,'&quot;');
+    return '<div class="caixa-linha"><span>'+esc(t)+
+      (fixo?' <span style="font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;background:var(--gray-2);color:var(--gray-5);border-radius:10px;padding:1px 7px;margin-left:6px;white-space:nowrap">fixo</span>':'')+'</span>'+
       '<span style="display:flex;gap:8px;align-items:center">'+
       '<span style="font-size:11px;color:var(--gray-4)">'+(uso?uso+' em uso':'não usado')+'</span>'+
-      '<button class="btn btn-outline btn-sm" onclick="editarTipoDoc('+JSON.stringify(t).replace(/"/g,'&quot;')+')">Editar</button>'+
-      '<button class="btn btn-outline btn-sm" onclick="delTipoDoc('+JSON.stringify(t).replace(/"/g,'&quot;')+')">Tirar</button>'+
+      // Em rotulo fixo nao vai botao que nao funciona: vai um que EXPLICA.
+      (fixo
+        ? '<button class="btn btn-outline btn-sm" onclick="porqueRotuloFixo()">Por que não sai?</button>'
+        : '<button class="btn btn-outline btn-sm" onclick="editarTipoDoc('+arg+')">Editar</button>'+
+          '<button class="btn btn-outline btn-sm" onclick="delTipoDoc('+arg+')">Tirar</button>')+
       '</span></div>';
-  }).join('')+'</div>';
+  }).join('')+'</div>'+
+  (temFixo?'<div style="font-size:11.5px;color:var(--gray-5);margin-top:8px;line-height:1.5">'+
+    'Os rótulos marcados como <b>fixo</b> são as três listas de material: é por eles que o botão <b>→ Compras</b> reconhece uma lista e abre o pedido. '+
+    'Para acabar com um rótulo repetido, use o <b>Editar</b> do repetido e escreva o nome do fixo — o sistema junta os dois.'+
+    '</div>':'');
 }
 
 // Rotulo em edicao; nulo = rotulo novo. Renomear existe porque rotulo em uso
@@ -5884,13 +5932,37 @@ async function addTipoDoc(){
   const nome=document.getElementById('td-nome').value.trim();
   if(!nome){ aviso('Falta o nome','Escreva o rótulo.'); return; }
   const antigo=_tipoDocEditando;
-  if(tiposDoc().some(function(t){ return t.toUpperCase()===nome.toUpperCase() && t!==antigo; })){
-    aviso('Já existe','Esse rótulo já está cadastrado.'); return;
-  }
+  // Rotulo fixo nao se renomeia: o botao "→ Compras" o procura pelo nome.
+  if(antigo && ehRotuloFixo(antigo)){ porqueRotuloFixo(); return; }
   if(antigo && antigo===nome){ cancelarEdicaoTipoDoc(); return; }
+  const igual=tiposDoc().filter(function(t){
+    return t.toUpperCase()===nome.toUpperCase() && t!==antigo;
+  })[0]||null;
+  // Rotulo NOVO com nome repetido continua sendo erro: nao ha o que juntar.
+  if(igual && !antigo){ aviso('Já existe','Esse rótulo já está cadastrado.'); return; }
   const uso=antigo?usoTipoDoc(antigo):0;
+  // JUNTAR: renomear para um rotulo que ja existe deixou de ser recusado e
+  // passou a ser o jeito de acabar com rotulo repetido ("Lista perfil
+  // aluminio" x "Lista de material perfil aluminio"). Antes a pessoa ficava
+  // presa dos dois lados: o Tirar recusava por estar em uso, e o Editar
+  // recusava por ja existir.
+  const juntar=!!(igual && antigo);
+  if(juntar){
+    if(!confirm('Já existe o rótulo "'+igual+'".\n\n'+
+      (uso? 'Juntar os dois? '+uso+' arquivo(s) de "'+antigo+'" passam a ter o rótulo "'+igual+'".'
+          : 'Juntar os dois? Nenhum arquivo usa "'+antigo+'", então ele apenas sai da lista.')+
+      '\n\nO rótulo "'+antigo+'" deixa de existir.')) return;
+  }
   const ok=await alterar(function(base){
     if(!Array.isArray(base.tiposDoc)||!base.tiposDoc.length) base.tiposDoc=TIPOS_DOC_PADRAO.slice();
+    if(juntar){
+      // Os arquivos passam para o rotulo que FICA, e o antigo sai da lista.
+      (base.contratos||[]).forEach(function(c){
+        (c.docs||[]).forEach(function(d){ if((d.tipo||'')===antigo) d.tipo=igual; });
+      });
+      base.tiposDoc=base.tiposDoc.filter(function(t){ return t!==antigo; });
+      return;
+    }
     if(antigo){
       const i=base.tiposDoc.indexOf(antigo);
       if(i<0) return;
@@ -5902,12 +5974,13 @@ async function addTipoDoc(){
     } else {
       base.tiposDoc.push(nome);
     }
-  }, {acao: antigo?'renomeou rótulo de anexo':'cadastrou rótulo de anexo',
-      alvo: antigo?antigo+' → '+nome:nome,
+  }, {acao: juntar?'juntou rótulo de anexo':(antigo?'renomeou rótulo de anexo':'cadastrou rótulo de anexo'),
+      alvo: antigo?antigo+' → '+(juntar?igual:nome):nome,
       detalhe: (antigo&&uso)?uso+' arquivo(s) com o nome novo':''});
   if(ok){
     // Ficha aberta por baixo: os anexos da tela tambem mudam de nome.
-    if(antigo) (fichaDocs||[]).forEach(function(d){ if((d.tipo||'')===antigo) d.tipo=nome; });
+    const ficou=juntar?igual:nome;
+    if(antigo) (fichaDocs||[]).forEach(function(d){ if((d.tipo||'')===antigo) d.tipo=ficou; });
     cancelarEdicaoTipoDoc();
     renderTiposDoc();
     preencherTiposDoc();
@@ -5916,6 +5989,7 @@ async function addTipoDoc(){
 }
 
 async function delTipoDoc(rotulo){
+  if(ehRotuloFixo(rotulo)){ porqueRotuloFixo(); return; }
   const uso=usoTipoDoc(rotulo);
   if(uso){
     aviso('Rótulo em uso','Existem '+uso+' arquivo(s) com o rótulo "'+rotulo+'".\n\n'+
@@ -6836,8 +6910,31 @@ function acharLancamentoDaObra(comp, idContrato, url){
   return null;
 }
 
-const ROTULOS_LISTA_COMPRAS=['Lista de material perfil aluminio',
-  'Lista de material acessorios','Lista de material vidro'];
+// Encurtados em 05/11/2026 a pedido do Ander. O reconhecimento passa pelo
+// normalizarRotuloLista (sem acento, sem maiuscula), entao escrever
+// "lista perfil aluminio" continua valendo — o que muda e so como aparece.
+const ROTULOS_LISTA_COMPRAS=['Lista perfil alumínio',
+  'Lista acessórios','Lista vidro'];
+// Como os tres se chamavam antes. Serve para converter o que ja esta gravado:
+// o anexo guarda o texto do rotulo, e sem isto os arquivos antigos ficariam
+// com o nome comprido para sempre — e, pior, deixariam de ser reconhecidos
+// como lista de material pelo botao "→ Compras".
+const ROTULOS_ANTIGOS={
+  'lista de material perfil aluminio':'Lista perfil alumínio',
+  'lista de material acessorios':'Lista acessórios',
+  'lista de material vidro':'Lista vidro'
+};
+// Devolve o nome que o rotulo deve ter hoje. Tambem acerta a grafia: quem
+// tinha criado "Lista perfil aluminio" na mao (sem acento) passa a ver o nome
+// oficial, em vez de dois rotulos iguais na lista.
+function encurtarRotulo(t){
+  const k=normalizarRotuloLista(t);
+  if(Object.prototype.hasOwnProperty.call(ROTULOS_ANTIGOS,k)) return ROTULOS_ANTIGOS[k];
+  const oficial=ROTULOS_LISTA_COMPRAS.filter(function(x){
+    return normalizarRotuloLista(x)===k;
+  })[0];
+  return oficial||t;
+}
 // As escolhas do campo "Pedidos no Compras" da ficha. Qualquer outro valor
 // gravado (ou vazio) vale como 'juntas', que e como o modulo sempre funcionou.
 const AGRUPAMENTOS_COMPRAS=['juntas','separadas','porlista'];
@@ -6846,10 +6943,10 @@ function normalizarRotuloLista(s){
 }
 // Este anexo e uma das tres listas de material? So elas viram cobranca de
 // material no Compras — uma Proposta ou uma foto nao.
+// Um lugar so para decidir o que e lista de material: antes esta conta
+// estava escrita aqui e dentro do ehRotuloFixo, e as duas podiam divergir.
 function ehListaMaterial(d){
-  return !!(d && d.url && ROTULOS_LISTA_COMPRAS.some(function(t){
-    return normalizarRotuloLista(d.tipo)===normalizarRotuloLista(t);
-  }));
+  return !!(d && d.url && ehRotuloFixo(d.tipo));
 }
 function listasMaterialCompras(c){
   return ((c&&c.docs)||[]).filter(function(d){ return ehListaMaterial(d); });
@@ -6892,7 +6989,10 @@ function criarLancamentoNoCompras(comp, c, chave, listas){
     obra: c.cliente,
     contrato: c.ct,
     entrega: c.entrega,
-    material: chave==='juntas'?'':String((listas[0]||{}).tipo||'').replace(/^Lista de material\s*/i,''), nrOrc:'', fornecedor:'', valor:0, dataOrc:'',
+    // Tira o "Lista " da frente para o pedido no Compras dizer so o material.
+    // O "de material" continua previsto para o caso de um anexo antigo chegar
+    // aqui antes de ter passado pela conversao da leitura.
+    material: chave==='juntas'?'':String((listas[0]||{}).tipo||'').replace(/^Lista\s+(de\s+material\s+)?/i,''), nrOrc:'', fornecedor:'', valor:0, dataOrc:'',
     medicao:'', diasUteis:0,
     status:'Pendente', tipo:'padrao',
     by: usuario,
